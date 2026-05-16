@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────
+#  secure-coin — .gitignore
+#  Kotlin 2.3 / Gradle 9 / JDK 21 JVM CLI project
+# ─────────────────────────────────────────────
+
+# ── Build output ──────────────────────────────
+build/
+out/
+bin/
+dist/
+target/
+
+# ── Compiled artefacts ────────────────────────
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# ── Gradle ────────────────────────────────────
+.gradle/
+gradle-app.setting
+!gradle/wrapper/gradle-wrapper.properties
+
+# ── Kotlin ────────────────────────────────────
+.kotlin/
+*.kts.compiled.cache
+
+# ── IDE ───────────────────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+!.idea/runConfigurations/
+.classpath
+.project
+.settings/
+
+# ── Logs & JVM diagnostics ────────────────────
+*.log
+logs/
+hs_err_pid*
+replay_pid*
+*.hprof
+
+# ── OS ────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+*~
+.fuse_hidden*
+.Trash-*
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── Editors ───────────────────────────────────
+.vscode/
+*.swp
+*.swo
+.nvimlog
+
+# ── Environment & secrets ─────────────────────
+.env
+.env.*
+*.key
+*.pem
+secrets/
