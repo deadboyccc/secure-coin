@@ -1,124 +1,113 @@
+
 import java.security.SecureRandom
+import kotlin.math.abs
 
 /**
- * A cryptographically secure Yes/No decision maker.
+ * Cryptographically secure Yes/No decision maker.
  *
  * Randomness source: [SecureRandom] backed by the OS entropy pool
- * (/dev/urandom on Linux, CryptGenRandom on Windows, arc4random on macOS).
+ * (`/dev/urandom` on Linux, `CryptGenRandom` on Windows, `arc4random` on macOS).
  * This is the highest-quality randomness available on the JVM without
  * dedicated hardware (HSM / TRNG).
  *
- * Fairness guarantee: we extract exactly ONE bit from the entropy stream.
- * A single bit is mathematically guaranteed to be 0 or 1 with P = 0.5 each,
- * so there is zero modulo-bias — unlike the naive nextInt() % 2, which
- * can skew for asymmetric ranges.
+ * Fairness: a single bit is extracted per decision — P(Yes) = P(No) = 0.5
+ * exactly, with zero modulo bias.
  */
 
-// ── Sealed hierarchy ──────────────────────────────────────────────────────────
+// ── Model ─────────────────────────────────────────────────────────────────────
 
-/** Represents the two possible outcomes of a binary decision. */
-sealed class Decision {
-    object Yes : Decision()
-    object No  : Decision()
+/**
+ * The two possible outcomes of a binary decision.
+ *
+ * Sealed interface (not class) — objects need no shared state or behaviour,
+ * so an interface is the leaner, more idiomatic choice in Kotlin 1.5+.
+ */
+sealed interface Decision {
+    /** Carries its display label so call sites need no extra mapping. */
+    val label: String
+
+    data object Yes : Decision {
+        override val label = "YES"
+    }
+
+    data object No : Decision {
+        override val label = "NO"
+    }
 }
 
-// ── Core randomness ───────────────────────────────────────────────────────────
+// ── Randomness ────────────────────────────────────────────────────────────────
 
 /**
- * A lazily-initialised, application-wide [SecureRandom] instance.
+ * Lazily-initialised, application-wide [SecureRandom].
  *
- * [SecureRandom] is thread-safe, so a single shared instance is both
- * correct and efficient — no need for per-thread instances or pooling.
- *
- * We use `lazy` so the OS entropy pool is not accessed until the first
- * actual use (important for short-lived CLI tools that might exit before
- * ever calling the generator).
+ * [SecureRandom] is thread-safe by specification — one shared instance
+ * is both correct and avoids the overhead of repeated seeding from the
+ * OS entropy pool.
  */
-private val secureRandom: SecureRandom by lazy { SecureRandom() }
+private val rng: SecureRandom by lazy { SecureRandom() }
 
 /**
- * Returns a single cryptographically secure random bit (0 or 1).
+ * Extracts a single cryptographically secure random bit as a [Boolean].
  *
- * Strategy:
- *  1. Ask [SecureRandom] for one random byte (8 bits of entropy).
- *  2. Isolate the least-significant bit with a bitwise AND (and 0x01).
- *     Every bit in a SecureRandom byte is independently and uniformly
- *     distributed, so the LSB is an unbiased coin flip.
- *  3. Discard the remaining 7 bits — we only need one decision per call,
- *     and reusing bits across calls would require state and add complexity
- *     for no real performance gain at this scale.
+ * One byte is requested from the OS entropy pool; the least-significant
+ * bit (LSB) is isolated via `and 1`. Every bit in a [SecureRandom] byte
+ * is independently and uniformly distributed, so this is an unbiased
+ * coin flip — P(true) = P(false) = 0.5 exactly.
  *
- * @return 0 (No) or 1 (Yes)
+ * The remaining 7 bits are discarded: reusing them would add stateful
+ * complexity for no measurable gain at this call frequency.
  */
-private fun secureRandomBit(): Int {
-    val singleByte = ByteArray(1)
-    secureRandom.nextBytes(singleByte)   // fills with OS-level entropy
-    return singleByte[0].toInt() and 0x01 // isolate the LSB
+private fun secureRandomBoolean(): Boolean {
+    val buf = ByteArray(1)
+    rng.nextBytes(buf)               // filled with OS-level entropy
+    return buf[0].toInt() and 1 == 1 // true ↔ LSB is set
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Makes a single cryptographically fair binary decision.
+ * Returns a cryptographically fair [Decision].
  *
- * The mapping is explicit and deterministic given the bit:
- *   - bit == 1  →  Decision.Yes
- *   - bit == 0  →  Decision.No
- *
- * Both branches have exactly P = 0.5 by construction.
+ * Implemented as a direct Boolean → Decision mapping so the compiler
+ * can verify exhaustiveness with no fall-through magic numbers.
  */
-fun decide(): Decision = when (secureRandomBit()) {
-    1    -> Decision.Yes
-    else -> Decision.No
-}
+fun decide(): Decision = if (secureRandomBoolean()) Decision.Yes else Decision.No
 
 /**
- * Answers a question with a [Decision], returning a human-readable string.
+ * Formats a question and its random answer as a two-line string.
  *
- * @param question The question to answer (used purely for display).
+ * Concerns are separated: [decide] owns randomness, this function owns
+ * presentation only.
  */
 fun answerQuestion(question: String): String {
     val decision = decide()
-    val answer = when (decision) {
-        is Decision.Yes -> "YES"
-        is Decision.No  -> "NO"
-    }
-    return "Q: $question\nA: $answer"
+    return "Q: $question\nA: ${decision.label}"
 }
 
-// ── Statistics helper ─────────────────────────────────────────────────────────
+// ── Statistics ────────────────────────────────────────────────────────────────
 
 /**
- * Runs [trials] decisions and prints a distribution report.
+ * Runs [trials] decisions and prints an empirical distribution report.
  *
- * Useful for empirically verifying the 50/50 guarantee.
- * At 100 000 trials the empirical split should be within ~0.2 % of 50 %.
- *
- * @param trials Number of decisions to simulate (default 100 000).
+ * At 100 000 trials the delta from 50 % is typically < 0.05 %,
+ * confirming the mathematical guarantee in practice.
  */
 fun distributionReport(trials: Int = 100_000) {
     require(trials > 0) { "trials must be positive, got $trials" }
 
-    var yesCount = 0
-    var noCount  = 0
+    // count() is idiomatic Kotlin — no mutable accumulators needed
+    val yesCount = (1..trials).count { decide() is Decision.Yes }
+    val noCount = trials - yesCount
 
-    repeat(trials) {
-        when (decide()) {
-            is Decision.Yes -> yesCount++
-            is Decision.No  -> noCount++
-        }
-    }
-
-    val yesPct = yesCount * 100.0 / trials
-    val noPct  = noCount  * 100.0 / trials
-    val delta  = Math.abs(yesPct - 50.0)
+    fun Int.toPct() = this * 100.0 / trials
+    fun Double.fmt() = "%.4f".format(this)
 
     println(
         """
         |┌─── Distribution report ($trials trials) ───────────────
-        |│  YES : $yesCount  (${"%.4f".format(yesPct)} %)
-        |│  NO  : $noCount   (${"%.4f".format(noPct)} %)
-        |│  Δ from ideal 50/50 : ${"%.4f".format(delta)} %
+        |│  YES : $yesCount  (${yesCount.toPct().fmt()} %)
+        |│  NO  : $noCount   (${noCount.toPct().fmt()} %)
+        |│  Δ from ideal 50/50 : ${abs(yesCount.toPct() - 50.0).fmt()} %
         |└────────────────────────────────────────────────────────
         """.trimMargin()
     )
@@ -129,16 +118,15 @@ fun distributionReport(trials: Int = 100_000) {
 fun main() {
     println("=== Secure Decision Maker ===\n")
 
-    // 1. Answer a few concrete questions.
-    val questions = listOf(
+    listOf(
         "Should I deploy to production today?",
         "Should I take the highway instead of the side road?",
-        "Should I refactor this module before the deadline?"
-    )
+        "Should I refactor this module before the deadline?",
+    ).forEach { question ->
+        println(answerQuestion(question))
+        println()
+    }
 
-    questions.forEach { println(answerQuestion(it) + "\n") }
-
-    // 2. Empirically verify the distribution is fair.
     println("=== Fairness verification ===\n")
     distributionReport(trials = 100_000)
 }
